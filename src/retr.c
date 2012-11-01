@@ -970,6 +970,11 @@ bail:
   return result;
 }
 
+struct urlpos *
+_default_get_next(struct urlpos *entry) {
+  return entry->next;
+}
+
 /* Find the URLs in the file and call retrieve_url() for each of them.
    If HTML is true, treat the file as HTML, and construct the URLs
    accordingly.
@@ -985,6 +990,7 @@ retrieve_from_file (const char *file, bool html, int *count)
 
   char *input_file, *url_file = NULL;
   const char *url = file;
+  struct urlpos * (*get_next)(struct urlpos *) = _default_get_next;
 
   status = RETROK;             /* Suppose everything is OK.  */
   *count = 0;                  /* Reset the URL count.  */
@@ -1034,12 +1040,20 @@ retrieve_from_file (const char *file, bool html, int *count)
   else
     input_file = (char *) file;
 
-  url_list = (html ? get_urls_html (input_file, NULL, NULL, iri)
-              : get_urls_file (input_file));
+  if (html) {
+	url_list = get_urls_html (input_file, NULL, NULL, iri);
+  }
+  else if (HYPHENP(file)) {
+    get_next = next_url_stdin;
+    url_list = get_url_stdin();
+  }
+  else {
+	url_list = get_urls_file (input_file);
+  }
 
   xfree_null (url_file);
 
-  for (cur_url = url_list; cur_url; cur_url = cur_url->next, ++*count)
+  for (cur_url = url_list; cur_url; cur_url = get_next(cur_url), ++*count)
     {
       char *filename = NULL, *new_file = NULL;
       int dt;

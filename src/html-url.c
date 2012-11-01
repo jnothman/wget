@@ -747,6 +747,50 @@ get_urls_html (const char *file, const char *url, bool *meta_disallow_follow,
 /* This doesn't really have anything to do with HTML, but it's similar
    to get_urls_html, so we put it here.  */
 
+inline struct url *
+_line_to_url(const char *line_beg, const char *line_end, const char *file) {
+  int up_error_code;
+  char *url_text;
+  struct url *ret;
+  /* Strip whitespace from the beginning and end of line. */
+  while (line_beg < line_end && c_isspace (*line_beg))
+    ++line_beg;
+  while (line_end > line_beg && c_isspace (*(line_end - 1)))
+    --line_end;
+
+  if (line_beg == line_end)
+    return NULL;
+
+  /* The URL is in the [line_beg, line_end) region. */
+
+  /* We must copy the URL to a zero-terminated string, and we
+     can't use alloca because we're in a loop.  *sigh*.  */
+  url_text = strdupdelim (line_beg, line_end);
+
+  if (opt.base_href)
+    {
+      /* Merge opt.base_href with URL. */
+      char *merged = uri_merge (opt.base_href, url_text);
+      xfree (url_text);
+      url_text = merged;
+    }
+
+  ret = url_parse (url_text, &up_error_code, NULL, false);
+  if (!ret)
+    {
+      char *error = url_error (url_text, up_error_code);
+      logprintf (LOG_NOTQUIET, _("%s: Invalid URL %s: %s\n"),
+                 file, url_text, error);
+      xfree (url_text);
+      xfree (error);
+      inform_exit_status (URLERROR);
+      return NULL;
+    }
+  xfree (url_text);
+
+  return ret;
+}
+
 struct urlpos *
 get_urls_file (const char *file)
 {
@@ -768,8 +812,6 @@ get_urls_file (const char *file)
   text_end = fm->content + fm->length;
   while (text < text_end)
     {
-      int up_error_code;
-      char *url_text;
       struct urlpos *entry;
       struct url *url;
 
@@ -781,43 +823,10 @@ get_urls_file (const char *file)
         ++line_end;
       text = line_end;
 
-      /* Strip whitespace from the beginning and end of line. */
-      while (line_beg < line_end && c_isspace (*line_beg))
-        ++line_beg;
-      while (line_end > line_beg && c_isspace (*(line_end - 1)))
-        --line_end;
-
-      if (line_beg == line_end)
-        continue;
-
-      /* The URL is in the [line_beg, line_end) region. */
-
-      /* We must copy the URL to a zero-terminated string, and we
-         can't use alloca because we're in a loop.  *sigh*.  */
-      url_text = strdupdelim (line_beg, line_end);
-
-      if (opt.base_href)
-        {
-          /* Merge opt.base_href with URL. */
-          char *merged = uri_merge (opt.base_href, url_text);
-          xfree (url_text);
-          url_text = merged;
-        }
-
-      url = url_parse (url_text, &up_error_code, NULL, false);
+      url = _line_to_url(line_beg, line_end, file);
       if (!url)
-        {
-          char *error = url_error (url_text, up_error_code);
-          logprintf (LOG_NOTQUIET, _("%s: Invalid URL %s: %s\n"),
-                     file, url_text, error);
-          xfree (url_text);
-          xfree (error);
-          inform_exit_status (URLERROR);
-          continue;
-        }
-      xfree (url_text);
-
-      entry = xnew0 (struct urlpos);
+        continue;
+      entry = (struct urlpos *) xnew0 (struct urlpos);
       entry->url = url;
 
       if (!head)
@@ -828,6 +837,44 @@ get_urls_file (const char *file)
     }
   wget_read_file_free (fm);
   return head;
+}
+
+struct urlpos *
+next_url_stdin (struct urlpos *entry) {
+  char *line_beg;
+  char *line_end;
+  struct url *url;
+
+  if (entry->url) {
+    /* Reuse existing urlpos but clear url */
+    url_free(entry->url);
+    entry->url = NULL;
+  }
+
+  line_beg = read_whole_line(stdin);
+  if (!line_beg) {
+    if (ferror(stdin))
+      logprintf (LOG_NOTQUIET, "%s: %s\n", "-", strerror (errno));
+    return NULL;
+  }
+
+  line_end = memchr (line_beg, '\n', strlen(line_beg));
+  if (!line_end) {
+    /* Assume EOF without nelwine */
+    line_end = line_beg + strlen(line_beg);
+  }
+
+  url = _line_to_url(line_beg, line_end, "-");
+  if (url) {
+    entry->url = url;
+    return entry;
+  }
+  return next_url_stdin(entry);
+}
+
+struct urlpos *
+get_url_stdin(void) {
+  return next_url_stdin((struct urlpos *) xnew0(struct urlpos));
 }
 
 void
